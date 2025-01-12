@@ -4,8 +4,10 @@ import vlc
 import time
 import logging
 import subprocess
-from flask import Flask, render_template, request, jsonify
+import threading
+from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.security import check_password_hash, generate_password_hash
+from functools import wraps
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,23 +30,73 @@ os.makedirs(CONFIG_DIR, exist_ok=True)
 DEFAULT_CONFIG = {
     "display_name": "Main Gallery Display",
     "videos": [],
-    "admin_password": generate_password_hash("admin")
+    "admin_password": generate_password_hash("admin"),
+    "preview_enabled": True
 }
 
 
 class VideoPlayer:
     def __init__(self):
-        self.instance = vlc.Instance(['--no-xlib'])
+        self.instance = vlc.Instance([
+            '--no-xlib',  # Disable X11 dependency
+            '--no-snapshot-preview',  # Disable snapshot preview window
+            '--no-osd',  # Disable on-screen display
+            '--no-video-title-show',  # Disable video title display
+            '--no-video-title',  # Ensure no video title
+            '--no-snapshot-sequential',  # Don't add number to snapshots
+        ])
         self.player = self.instance.media_player_new()
         self.playlist = []
         self.current_index = 0
+        self.snapshot_path = os.path.join(CONFIG_DIR, "current_frame.png")
+        self.snapshot_lock = threading.Lock()
+        self.snapshot_thread = None
         self.load_config()
 
         # Set up event manager right away
         self.event_manager = self.player.event_manager()
         self.event_manager.event_attach(
             vlc.EventType.MediaPlayerEndReached, self._on_media_end)
+
+        # Only start snapshot thread if preview is enabled
+        self._start_or_stop_preview()
+
         logger.info("VideoPlayer initialized")
+
+    def _snapshot_loop(self):
+        """Continuously take snapshots of the video output"""
+        while True:
+            try:
+                if self.player.is_playing():
+                    with self.snapshot_lock:
+                        self.player.video_take_snapshot(
+                            0, self.snapshot_path, 0, 0)
+            except Exception as e:
+                logger.error(f"Error taking snapshot: {e}")
+            time.sleep(1)  # Take snapshot every second
+
+    def _start_or_stop_preview(self):
+        """Start or stop the preview based on config"""
+        preview_enabled = self.config.get('preview_enabled', False)
+
+        # Stop existing thread if it's running
+        if self.snapshot_thread and self.snapshot_thread.is_alive():
+            logger.info("Stopping existing preview thread")
+            self.snapshot_thread = None
+
+        # Start new thread if preview is enabled
+        if preview_enabled and not self.snapshot_thread:
+            logger.info("Starting preview thread")
+            self.snapshot_thread = threading.Thread(
+                target=self._snapshot_loop, daemon=True)
+            self.snapshot_thread.start()
+
+        # Clean up snapshot file if preview is disabled
+        if not preview_enabled and os.path.exists(self.snapshot_path):
+            try:
+                os.remove(self.snapshot_path)
+            except Exception as e:
+                logger.error(f"Error removing snapshot file: {e}")
 
     def load_config(self):
         try:
@@ -88,6 +140,8 @@ class VideoPlayer:
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(self.config, f, indent=2)
                 logger.info("Config saved successfully")
+            # Update preview thread state after config save
+            self._start_or_stop_preview()
         except Exception as e:
             logger.error(f"Error saving config: {e}")
 
@@ -172,7 +226,39 @@ player = VideoPlayer()
 # Flask routes
 
 
+def check_auth(username, password):
+    """Check if username/password combination is valid."""
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            # We only check password since we're using a single admin user
+            return check_password_hash(config.get('admin_password', DEFAULT_CONFIG['admin_password']), password)
+    except FileNotFoundError:
+        # If config doesn't exist, use default password
+        return password == "admin"
+
+
+def authenticate():
+    """Send a 401 response that enables basic auth."""
+    return Response(
+        'Could not verify your credentials.\n'
+        'Please login with proper credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+
 @app.route('/')
+@requires_auth
 def index():
     return render_template('index.html',
                            config=player.config,
@@ -180,6 +266,7 @@ def index():
 
 
 @app.route('/update_config', methods=['POST'])
+@requires_auth
 def update_config():
     try:
         data = request.get_json()
@@ -203,15 +290,47 @@ def update_config():
 
 
 @app.route('/system/restart', methods=['POST'])
+@requires_auth
 def restart_system():
     subprocess.run(['sudo', 'reboot'])
     return jsonify({'status': 'success'})
 
 
 @app.route('/system/restart_daemon', methods=['POST'])
+@requires_auth
 def restart_daemon():
     logger.info("Received restart request, terminating process...")
     os._exit(0)  # Force immediate exit, systemd will restart us
+
+
+@app.route('/preview.png')
+@requires_auth
+def preview():
+    """Serve the latest video snapshot"""
+    if not player.config.get('preview_enabled', False):
+        return '', 404
+
+    try:
+        if not os.path.exists(player.snapshot_path):
+            return send_file('static/images/no-preview.png', mimetype='image/png')
+
+        with player.snapshot_lock:
+            return send_file(player.snapshot_path, mimetype='image/png')
+    except Exception as e:
+        logger.error(f"Error serving preview: {e}")
+        return send_file('static/images/no-preview.png', mimetype='image/png')
+
+
+@app.route('/toggle_preview', methods=['POST'])
+@requires_auth
+def toggle_preview():
+    try:
+        player.config['preview_enabled'] = not player.config.get(
+            'preview_enabled', False)
+        player.save_config()
+        return jsonify({'status': 'success', 'preview_enabled': player.config['preview_enabled']})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 def main():
