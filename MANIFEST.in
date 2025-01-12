@@ -1,0 +1,2 @@
+include museum_player/templates/*.html
+include requirements.txt

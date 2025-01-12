@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>{{ museum_name }} - Video Control</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        h1,
+        h2 {
+            color: #333;
+            text-align: center;
+        }
+
+        .video-list {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .video-item {
+            background: #f9f9f9;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            cursor: move;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .video-item:hover {
+            background: #f0f0f0;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 0;
+            width: 100%;
+        }
+
+        button.restart {
+            background: #f44336;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+        }
+
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js"></script>
+</head>
+
+<body>
+    <h1>{{ museum_name }}</h1>
+    <h2>Video Display Control Panel</h2>
+
+    <div class="video-list">
+        <label>
+            Display Name:
+            <input type="text" id="display-name" value="{{ config.display_name }}">
+        </label>
+
+        <div id="video-items">
+            {% for video in config.videos %}
+            <div class="video-item" data-path="{{ video.path }}">
+                <label class="checkbox-label">
+                    <input type="checkbox" {% if video.enabled %}checked{% endif %}>
+                    {{ video.name }}
+                </label>
+            </div>
+            {% endfor %}
+        </div>
+
+        <button onclick="saveChanges()">Save Changes</button>
+        <button onclick="restartDaemon()" class="restart">Restart Video Player</button>
+        <button onclick="restartSystem()" class="restart">Restart Display System</button>
+    </div>
+
+    <script>
+        new Sortable(document.getElementById('video-items'), {
+            animation: 150,
+            ghostClass: 'sortable-ghost'
+        });
+
+        function saveChanges() {
+            const videos = [];
+            document.querySelectorAll('.video-item').forEach((item, index) => {
+                videos.push({
+                    path: item.dataset.path,
+                    name: item.querySelector('label').textContent.trim(),
+                    enabled: item.querySelector('input[type="checkbox"]').checked,
+                    order: index
+                });
+            });
+
+            const config = {
+                display_name: document.getElementById('display-name').value,
+                videos: videos
+            };
+
+            fetch('/update_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        alert('Changes saved successfully! Playback will restart with the new configuration.');
+                    }
+                })
+                .catch(error => {
+                    alert('Error saving changes. Please try again.');
+                });
+        }
+
+        function restartDaemon() {
+            if (confirm('Are you sure you want to restart the video player?')) {
+                fetch('/system/restart_daemon', {
+                    method: 'POST'
+                });
+            }
+        }
+
+        function restartSystem() {
+            if (confirm('Are you sure you want to restart the entire system?')) {
+                fetch('/system/restart', {
+                    method: 'POST'
+                });
+            }
+        }
+    </script>
+</body>
+
+</html>
