@@ -144,6 +144,9 @@ class VideoPlayer:
             logger.error(f"Error saving config: {e}")
 
     def update_playlist(self):
+        # Stop current playback
+        self.list_player.stop()
+
         # Clear existing playlist
         self.media_list.lock()
         while self.media_list.count() > 0:
@@ -161,10 +164,9 @@ class VideoPlayer:
 
         self.media_list.unlock()
 
-        # Start playback if not already playing
-        if not self.list_player.is_playing():
-            self.list_player.set_playback_mode(vlc.PlaybackMode.loop)
-            self.list_player.play()
+        # Start playback with new playlist
+        self.list_player.set_playback_mode(vlc.PlaybackMode.loop)
+        self.list_player.play()
 
 
 player = VideoPlayer()
@@ -211,13 +213,6 @@ def index():
                            museum_name="Poulsbo Historical Society")
 
 
-@app.route('/system/restart_daemon', methods=['POST'])
-@requires_auth
-def restart_daemon():
-    logger.info("Received restart request, terminating process...")
-    os._exit(0)  # Force immediate exit, systemd will restart us
-
-
 @app.route('/update_config', methods=['POST'])
 @requires_auth
 def update_config():
@@ -235,7 +230,7 @@ def update_config():
             player.config['videos'] = data['videos']
 
         player.save_config()
-        restart_daemon()
+        player.update_playlist()
         return jsonify({'status': 'success'})
     except Exception as e:
         logger.error(f"Error updating config: {e}")
@@ -247,6 +242,13 @@ def update_config():
 def restart_system():
     subprocess.run(['sudo', 'reboot'])
     return jsonify({'status': 'success'})
+
+
+@app.route('/system/restart_daemon', methods=['POST'])
+@requires_auth
+def restart_daemon():
+    logger.info("Received restart request, terminating process...")
+    os._exit(0)  # Force immediate exit, systemd will restart us
 
 
 @app.route('/preview.png')
