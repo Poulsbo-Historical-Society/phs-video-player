@@ -5,6 +5,9 @@ import time
 import logging
 import subprocess
 import threading
+import keyboard
+import signal
+import sys
 from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.security import check_password_hash, generate_password_hash
 from functools import wraps
@@ -44,19 +47,21 @@ class VideoPlayer:
             '--no-video-title-show',  # Disable video title display
             '--no-video-title',  # Ensure no video title
             '--no-snapshot-sequential',  # Don't add number to snapshots
+            '--fullscreen'
         ])
-        self.player = self.instance.media_player_new()
-        self.playlist = []
-        self.current_index = 0
+        self.list_player = self.instance.media_list_player_new()
+        self.media_list = self.instance.media_list_new()
+        self.list_player.set_media_list(self.media_list)
+
+        # Get the underlying media player for fullscree
+        self.player = self.list_player.get_media_player()
+        self.player.set_fullscreen(True)
+
         self.snapshot_path = os.path.join(CONFIG_DIR, "current_frame.png")
         self.snapshot_lock = threading.Lock()
         self.snapshot_thread = None
-        self.load_config()
 
-        # Set up event manager right away
-        self.event_manager = self.player.event_manager()
-        self.event_manager.event_attach(
-            vlc.EventType.MediaPlayerEndReached, self._on_media_end)
+        self.load_config()
 
         # Only start snapshot thread if preview is enabled
         self._start_or_stop_preview()
@@ -102,38 +107,31 @@ class VideoPlayer:
         try:
             with open(CONFIG_FILE, 'r') as f:
                 self.config = json.load(f)
-                logger.info(f"Loaded config from {CONFIG_FILE}")
         except FileNotFoundError:
-            logger.info("No config file found, using defaults")
             self.config = DEFAULT_CONFIG.copy()
             self.save_config()
 
         # Scan videos directory and update available videos
         available_videos = []
-        try:
-            for file in os.listdir(VIDEO_DIR):
-                if file.lower().endswith(('.mp4', '.avi', '.mkv')):
-                    video_path = os.path.join(VIDEO_DIR, file)
-                    # Check if video already exists in config
-                    existing = next(
-                        (v for v in self.config['videos'] if v['path'] == video_path), None)
-                    if existing:
-                        logger.info(f"Found existing video config for {file}")
-                        available_videos.append(existing)
-                    else:
-                        logger.info(f"Adding new video: {file}")
-                        available_videos.append({
-                            'path': video_path,
-                            'name': file,
-                            'enabled': True,
-                            'order': len(available_videos)
-                        })
+        for file in os.listdir(VIDEO_DIR):
+            if file.lower().endswith(('.mp4', '.avi', '.mkv')):
+                video_path = os.path.join(VIDEO_DIR, file)
+                # Check if video already exists in config
+                existing = next(
+                    (v for v in self.config['videos'] if v['path'] == video_path), None)
+                if existing:
+                    available_videos.append(existing)
+                else:
+                    available_videos.append({
+                        'path': video_path,
+                        'name': file,
+                        'enabled': True,
+                        'order': len(available_videos)
+                    })
 
-            self.config['videos'] = available_videos
-            self.save_config()
-            self.update_playlist()
-        except Exception as e:
-            logger.error(f"Error scanning video directory: {e}")
+        self.config['videos'] = available_videos
+        self.save_config()
+        self.update_playlist()
 
     def save_config(self):
         try:
@@ -146,79 +144,27 @@ class VideoPlayer:
             logger.error(f"Error saving config: {e}")
 
     def update_playlist(self):
-        # Sort videos by order and filter enabled ones
+        # Clear existing playlist
+        self.media_list.lock()
+        while self.media_list.count() > 0:
+            self.media_list.remove_index(0)
+
+        # Add enabled videos in correct order
         enabled_videos = sorted(
             [v for v in self.config['videos'] if v['enabled']],
             key=lambda x: x['order']
         )
-        self.playlist = [v['path'] for v in enabled_videos]
 
-        logger.info(f"Updated playlist with {len(self.playlist)} videos")
-        logger.info(f"Playlist: {self.playlist}")
+        for video in enabled_videos:
+            media = self.instance.media_new(video['path'])
+            self.media_list.add_media(media)
 
-        # Force restart of playback
-        self.current_index = 0
-        if self.playlist:
-            if self.player.is_playing():
-                logger.info("Stopping current playback")
-                self.player.stop()
-            self.play_next()
+        self.media_list.unlock()
 
-    def _on_media_end(self, event):
-        logger.info(f"Video ended (current_index: {self.current_index})")
-        # We're in an event callback, so schedule the next video with a small delay
-        import threading
-        threading.Timer(0.5, self._play_next_delayed).start()
-
-    def _play_next_delayed(self):
-        self.current_index += 1
-        if self.current_index >= len(self.playlist):
-            logger.info("Reached end of playlist, restarting from beginning")
-            self.current_index = 0
-        self.play_next()
-
-    def play_next(self):
-        if not self.playlist:
-            logger.warning("No videos in playlist")
-            return
-
-        video_path = self.playlist[self.current_index]
-        logger.info(f"Playing video: {
-                    video_path} (index: {self.current_index})")
-
-        # Stop any current playback
-        self.player.stop()
-
-        # Check for matching subtitle file
-        srt_path = os.path.splitext(video_path)[0] + '.srt'
-
-        # Create and set new media
-        media = self.instance.media_new(video_path)
-
-        # If subtitle file exists, add it to the media
-        if os.path.exists(srt_path):
-            logger.info(f"Found subtitle file: {srt_path}")
-            media.add_options(f'sub-file={srt_path}')
-        else:
-            logger.info("No subtitle file found")
-
-        self.player.set_media(media)
-
-        # Ensure we're in fullscreen mode
-        self.player.set_fullscreen(True)
-
-        # Small delay to ensure media is loaded
-        time.sleep(0.1)
-
-        # Play and verify it started
-        result = self.player.play()
-        logger.info(f"Play command result: {result}")
-
-        # Wait a bit and check if we're actually playing
-        time.sleep(0.2)
-        if not self.player.is_playing():
-            logger.error("Failed to start playback, retrying...")
-            self.player.play()
+        # Start playback if not already playing
+        if not self.list_player.is_playing():
+            self.list_player.set_playback_mode(vlc.PlaybackMode.loop)
+            self.list_player.play()
 
 
 player = VideoPlayer()
@@ -333,8 +279,32 @@ def toggle_preview():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+def cleanup():
+    print("Stopping PHS Video Player...")
+    # Stop systemd service and prevent auto-restart
+    try:
+        subprocess.run(['sudo', 'systemctl', 'stop', 'phs-video-player'])
+        # Ensure the process exits
+        sys.exit(0)
+    finally:
+        os._exit(0)
+
+
 def main():
-    app.run(host='0.0.0.0', port=5000)
+    from threading import Thread
+
+    # Start Flask in a separate thread
+    flask_thread = Thread(target=lambda: app.run(
+        host='0.0.0.0', port=5000), daemon=True)
+    flask_thread.start()
+
+    print("PHS Video Player started. Press Ctrl+Q to stop.")
+
+    # Register Ctrl+Q shortcut
+    keyboard.add_hotkey('ctrl+q', cleanup)
+
+    # Keep the main thread running to handle keyboard events
+    keyboard.wait('ctrl+q')
 
 
 if __name__ == '__main__':
