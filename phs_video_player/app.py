@@ -211,6 +211,13 @@ def index():
                            museum_name="Poulsbo Historical Society")
 
 
+@app.route('/system/restart_daemon', methods=['POST'])
+@requires_auth
+def restart_daemon():
+    logger.info("Received restart request, terminating process...")
+    os._exit(0)  # Force immediate exit, systemd will restart us
+
+
 @app.route('/update_config', methods=['POST'])
 @requires_auth
 def update_config():
@@ -228,7 +235,7 @@ def update_config():
             player.config['videos'] = data['videos']
 
         player.save_config()
-        player.update_playlist()
+        restart_daemon()
         return jsonify({'status': 'success'})
     except Exception as e:
         logger.error(f"Error updating config: {e}")
@@ -240,13 +247,6 @@ def update_config():
 def restart_system():
     subprocess.run(['sudo', 'reboot'])
     return jsonify({'status': 'success'})
-
-
-@app.route('/system/restart_daemon', methods=['POST'])
-@requires_auth
-def restart_daemon():
-    logger.info("Received restart request, terminating process...")
-    os._exit(0)  # Force immediate exit, systemd will restart us
 
 
 @app.route('/preview.png')
