@@ -38,7 +38,7 @@ sudo chown $USER:$USER /opt/phs-videos
 ```bash
 # Clone the repository
 cd /opt
-git clone git@github.com:Poulsbo-Historical-Society/phs-video-player.git phs-video-player
+git clone https://github.com/Poulsbo-Historical-Society/phs-video-player.git
 cd phs-video-player
 
 # Create and activate virtual environment
