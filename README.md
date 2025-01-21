@@ -26,6 +26,18 @@ A simple, robust video player system for the Poulsbo Historical Society museum d
 ```bash
 sudo apt-get update
 sudo apt-get install python3-pip vlc
+
+# install python3.12
+wget -qO- https://pascalroeleven.nl/deb-pascalroeleven.gpg | sudo tee /etc/apt/keyrings/deb-pascalroeleven.gpg
+cat <<EOF | sudo tee /etc/apt/sources.list.d/pascalroeleven.sources
+Types: deb
+URIs: http://deb.pascalroeleven.nl/python3.12
+Suites: bookworm-backports
+Components: main
+Signed-By: /etc/apt/keyrings/deb-pascalroeleven.gpg
+EOF
+sudo apt update
+sudo apt install python3.12 python3.12-venv
 ```
 
 2. Create the video directory:
@@ -43,10 +55,11 @@ cd phs-video-player
 
 # Create and activate virtual environment
 python3.12 -m venv venv
-source venv/bin/activate
 
 # Install the package
-pip3 install -e .
+sudo su
+source venv/bin/activate
+pip3 install -r requirements.txt
 ```
 
 4. Configure the environment:

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html data-theme="{{ 'dark' if config.get('dark_mode', False) else 'light' }}">
+
+<head>
+    <title>PHS / {{ config.display_name }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        /* Reset and base styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Light/Dark mode variables */
+        :root[data-theme="light"] {
+            --bg-color: #f5f5f5;
+            --card-bg: #ffffff;
+            --text-color: #333333;
+            --text-secondary: #666666;
+            --item-bg: #f8f9fa;
+            --item-active: #4CAF50;
+            --item-active-text: #ffffff;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+        }
+
+        :root[data-theme="dark"] {
+            --bg-color: #121212;
+            --card-bg: #1e1e1e;
+            --text-color: #e0e0e0;
+            --text-secondary: #b0b0b0;
+            --item-bg: #2d2d2d;
+            --item-active: #4CAF50;
+            --item-active-text: #ffffff;
+            --shadow-color: rgba(0, 0, 0, 0.3);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            padding: 16px;
+            max-width: 100%;
+            margin: 0;
+            color: var(--text-color);
+            overscroll-behavior-y: none;
+        }
+
+        /* Logo styles */
+        .logo-container {
+            text-align: center;
+            margin-bottom: 16px;
+            padding: 8px;
+        }
+
+        .logo {
+            max-width: 180px;
+            height: auto;
+        }
+
+        /* Header styles */
+        h2 {
+            color: var(--text-color);
+            text-align: center;
+            font-size: 20px;
+            margin-bottom: 20px;
+            padding: 0 16px;
+        }
+
+        /* Instructions panel */
+        .instructions {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 16px auto;
+            box-shadow: 0 2px 8px var(--shadow-color);
+            max-width: 600px;
+        }
+
+        .instructions p {
+            line-height: 1.6;
+            font-size: 20px;
+            color: var(--text-color);
+            text-align: center;
+        }
+
+        /* Video list container */
+        .video-list {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 16px auto;
+            box-shadow: 0 2px 8px var(--shadow-color);
+            max-width: 600px;
+        }
+
+        /* Individual video items */
+        .video-item {
+            background: var(--item-bg);
+            padding: 20px;
+            margin: 12px 0;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 64px;
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+            -webkit-user-select: none;
+            color: var(--text-color);
+            position: relative;
+        }
+
+        .video-item:active {
+            transform: scale(0.98);
+            opacity: 0.8;
+        }
+
+        .video-item.active {
+            background: var(--item-active);
+            color: var(--item-active-text);
+        }
+
+        .video-title {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .video-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .video-duration {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        /* Ensure text is white when item is active */
+        .video-item.active .video-title,
+        .video-item.active .video-description,
+        .video-item.active .video-duration {
+            color: var(--item-active-text);
+        }
+
+
+        /* Disable text selection globally */
+        body {
+            -webkit-user-select: none;
+            user-select: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="logo-container">
+        <img src="{{ url_for('static', filename='images/' + ('PHS_white_logo.png' if config.get('dark_mode', False) else 'phs-color-logo.png')) }}"
+            alt="Museum Logo" class="logo">
+    </div>
+
+    <h2>{{ config.display_name }}</h2>
+
+    <div class="instructions">
+        <p>Touch a video title to begin playing</p>
+    </div>
+
+    <div class="video-list">
+        <div id="video-items">
+            {% for video in config.videos %}
+            <div class="video-item {% if video.enabled and config.videos|selectattr('enabled')|list|length == 1 %}active{% endif %}"
+                data-path="{{ video.path }}" data-name="{{ video.name }}" onclick="selectVideo(this)">
+                <div class="video-title">{{ video.title }}</div>
+                {% if video.description %}
+                <div class="video-description">{{ video.description }}</div>
+                {% endif %}
+                {% if video.duration > 0 %}
+                <div class="video-duration">{{ video.duration }} min</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script>
+        function selectVideo(element) {
+            // Remove active class from all videos
+            document.querySelectorAll('.video-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Add active class to selected video
+            element.classList.add('active');
+
+            // Prepare the configuration update
+            const videos = [];
+            document.querySelectorAll('.video-item').forEach((item, index) => {
+                videos.push({
+                    path: item.dataset.path,
+                    name: item.dataset.name,
+                    enabled: item === element,
+                    order: index
+                });
+            });
+
+            const config = {
+                display_name: "{{ config.display_name }}",
+                videos: videos
+            };
+
+            // Send the update
+            fetch('/update_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            })
+                .then(response => response.json())
+                .catch(error => {
+                    console.error('Error updating video selection');
+                });
+        }
+    </script>
+</body>
+
+</html>

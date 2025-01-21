@@ -43,12 +43,55 @@
             border-radius: 4px;
             cursor: move;
             display: flex;
-            align-items: center;
-            gap: 10px;
+            align-items: flex-start;
+            gap: 12px;
         }
 
         .video-item:hover {
             background: #f0f0f0;
+        }
+
+        .checkbox-wrapper {
+            padding-top: 2px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+            /* Allow flex item to shrink below content size */
+        }
+
+        .video-content {
+            flex: 1;
+            min-width: 0;
+            /* Allow flex item to shrink below content size */
+        }
+
+        .video-title {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .video-description {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .video-duration {
+            font-size: 14px;
+            color: #666;
+            white-space: nowrap;
+            padding-left: 12px;
+        }
+
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin: 0;
         }
 
         input[type="text"] {
@@ -78,18 +121,6 @@
 
         button:hover {
             opacity: 0.9;
-        }
-
-        .checkbox-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 16px;
-        }
-
-        input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
         }
 
         .preview-container {
@@ -187,6 +218,11 @@
     </div> -->
     {% endif %}
 
+    <a href="/simple"
+        style="display: inline-block; background: #2196F3; color: white; padding: 12px 24px; border-radius: 4px; text-decoration: none; margin: 10px 0;">
+        Switch to Simple Mode
+    </a>
+
     <div class="video-list">
         <label>
             Display Name:
@@ -196,10 +232,18 @@
         <div id="video-items">
             {% for video in config.videos %}
             <div class="video-item" data-path="{{ video.path }}">
-                <label class="checkbox-label">
+                <div class="checkbox-wrapper">
                     <input type="checkbox" {% if video.enabled %}checked{% endif %}>
-                    {{ video.name }}
-                </label>
+                </div>
+                <div class="video-content">
+                    <div class="video-title">{{ video.title }}</div>
+                    {% if video.description %}
+                    <div class="video-description">{{ video.description }}</div>
+                    {% endif %}
+                </div>
+                {% if video.duration > 0 %}
+                <div class="video-duration">{{ video.duration }} min</div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

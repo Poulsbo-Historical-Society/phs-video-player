@@ -5,9 +5,8 @@ import time
 import logging
 import subprocess
 import threading
-import keyboard
-import signal
 import sys
+import math
 from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.security import check_password_hash, generate_password_hash
 from functools import wraps
@@ -34,7 +33,8 @@ DEFAULT_CONFIG = {
     "display_name": "Main Gallery Display",
     "videos": [],
     "admin_password": generate_password_hash("admin"),
-    "preview_enabled": True
+    "preview_enabled": False,
+    "dark_mode": True
 }
 
 
@@ -49,6 +49,11 @@ class VideoPlayer:
             '--no-snapshot-sequential',  # Don't add number to snapshots
             '--fullscreen'
         ])
+
+        # Add a separate instance for metadata extraction
+        self.metadata_instance = vlc.Instance(['--no-video'])
+        self.metadata_cache = {}  # Add cache for metadata
+
         self.list_player = self.instance.media_list_player_new()
         self.media_list = self.instance.media_list_new()
         self.list_player.set_media_list(self.media_list)
@@ -67,6 +72,50 @@ class VideoPlayer:
         self._start_or_stop_preview()
 
         logger.info("VideoPlayer initialized")
+
+    def get_video_metadata(self, path):
+        """Extract metadata from a video file using VLC."""
+        # Check cache first
+        if path in self.metadata_cache:
+            return self.metadata_cache[path]
+
+        try:
+            media = self.metadata_instance.media_new(path)
+            media.parse()
+
+            # Get duration in milliseconds and convert to minutes (rounded up)
+            duration_ms = media.get_duration()
+            # Convert to minutes and round up
+            duration_min = math.ceil(duration_ms / 60000)
+
+            # Get title from metadata or use filename
+            title = media.get_meta(vlc.Meta.Title)
+            if not title:
+                title = os.path.splitext(os.path.basename(path))[0]
+                # Convert filename to title case and replace underscores/hyphens with spaces
+                title = title.replace('_', ' ').replace('-', ' ').title()
+
+            # Get description from metadata
+            description = media.get_meta(vlc.Meta.Description) or ""
+
+            metadata = {
+                'title': title,
+                'description': description,
+                'duration': duration_min
+            }
+
+            # Cache the metadata
+            self.metadata_cache[path] = metadata
+            return metadata
+        except Exception as e:
+            logger.error(f"Error extracting metadata for {path}: {e}")
+            metadata = {
+                'title': os.path.splitext(os.path.basename(path))[0].replace('_', ' ').replace('-', ' ').title(),
+                'description': '',
+                'duration': 0
+            }
+            self.metadata_cache[path] = metadata
+            return metadata
 
     def _snapshot_loop(self):
         """Continuously take snapshots of the video output"""
@@ -111,7 +160,7 @@ class VideoPlayer:
             self.config = DEFAULT_CONFIG.copy()
             self.save_config()
 
-        # Scan videos directory and update available videos
+        # Scan videos directory and update available videos with metadata
         available_videos = []
         for file in os.listdir(VIDEO_DIR):
             if file.lower().endswith(('.mp4', '.avi', '.mkv')):
@@ -119,15 +168,32 @@ class VideoPlayer:
                 # Check if video already exists in config
                 existing = next(
                     (v for v in self.config['videos'] if v['path'] == video_path), None)
+
+                # Get metadata for the video
+                metadata = self.get_video_metadata(video_path)
+
                 if existing:
-                    available_videos.append(existing)
+                    # Create a new dict with default values for missing fields
+                    video_entry = {
+                        'path': video_path,
+                        'name': file,
+                        'enabled': existing.get('enabled', True),
+                        'order': existing.get('order', len(available_videos)),
+                        'title': existing.get('title', metadata['title']),
+                        'description': existing.get('description', metadata['description']),
+                        'duration': existing.get('duration', metadata['duration'])
+                    }
+                    available_videos.append(video_entry)
                 else:
-                    available_videos.append({
+                    # Create new entry with metadata
+                    video_entry = {
                         'path': video_path,
                         'name': file,
                         'enabled': True,
-                        'order': len(available_videos)
-                    })
+                        'order': len(available_videos),
+                        **metadata
+                    }
+                    available_videos.append(video_entry)
 
         self.config['videos'] = available_videos
         self.save_config()
@@ -213,6 +279,14 @@ def index():
                            museum_name="Poulsbo Historical Society")
 
 
+@app.route('/simple')
+@requires_auth
+def simple():
+    return render_template('simple.html',
+                           config=player.config,
+                           museum_name="Poulsbo Historical Society")
+
+
 @app.route('/update_config', methods=['POST'])
 @requires_auth
 def update_config():
@@ -222,12 +296,31 @@ def update_config():
 
         if 'display_name' in data:
             player.config['display_name'] = data['display_name']
+
         if 'videos' in data:
-            # Ensure order is properly set as integer
+            # Create a mapping of paths to existing video data
+            existing_videos = {v['path']: v for v in player.config['videos']}
+
+            # Update videos while preserving metadata
+            updated_videos = []
             for video in data['videos']:
-                video['order'] = int(video['order'])
-                video['enabled'] = bool(video['enabled'])
-            player.config['videos'] = data['videos']
+                # Get existing video data if available
+                existing = existing_videos.get(video['path'], {})
+
+                # Merge new data with existing, prioritizing new values for enabled and order
+                updated_video = {
+                    'path': video['path'],
+                    'name': existing.get('name', video.get('name')),
+                    'title': existing.get('title', video.get('title')),
+                    'description': existing.get('description', video.get('description')),
+                    'duration': existing.get('duration', video.get('duration', 0)),
+                    # Always use new enabled state
+                    'enabled': video['enabled'],
+                    'order': video['order']      # Always use new order
+                }
+                updated_videos.append(updated_video)
+
+            player.config['videos'] = updated_videos
 
         player.save_config()
         player.update_playlist()
@@ -293,20 +386,8 @@ def cleanup():
 
 
 def main():
-    from threading import Thread
-
-    # Start Flask in a separate thread
-    flask_thread = Thread(target=lambda: app.run(
-        host='0.0.0.0', port=5000), daemon=True)
-    flask_thread.start()
-
-    print("PHS Video Player started. Press Ctrl+Q to stop.")
-
-    # Register Ctrl+Q shortcut
-    keyboard.add_hotkey('ctrl+q', cleanup)
-
-    # Keep the main thread running to handle keyboard events
-    keyboard.wait('ctrl+q')
+    print("PHS Video Player started")
+    app.run(host='0.0.0.0', port=5000)
 
 
 if __name__ == '__main__':
