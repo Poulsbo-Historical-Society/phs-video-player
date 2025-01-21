@@ -231,7 +231,7 @@
 
         <div id="video-items">
             {% for video in config.videos %}
-            <div class="video-item" data-path="{{ video.path }}">
+            <div class="video-item" data-path="{{ video.path }}" data-name="{{ video.name }}">
                 <div class="checkbox-wrapper">
                     <input type="checkbox" {% if video.enabled %}checked{% endif %}>
                 </div>
@@ -277,7 +277,7 @@
             document.querySelectorAll('.video-item').forEach((item, index) => {
                 videos.push({
                     path: item.dataset.path,
-                    name: item.querySelector('label').textContent.trim(),
+                    name: item.dataset.path,
                     enabled: item.querySelector('input[type="checkbox"]').checked,
                     order: index
                 });
