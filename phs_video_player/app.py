@@ -160,32 +160,33 @@ class VideoPlayer:
             self.config = DEFAULT_CONFIG.copy()
             self.save_config()
 
-        # Scan videos directory and update available videos with metadata
+        # Scan videos directory and update available videos
         available_videos = []
         for file in os.listdir(VIDEO_DIR):
             if file.lower().endswith(('.mp4', '.avi', '.mkv')):
                 video_path = os.path.join(VIDEO_DIR, file)
+
+                # Always get fresh metadata from the file
+                metadata = self.get_video_metadata(video_path)
+
                 # Check if video already exists in config
                 existing = next(
                     (v for v in self.config['videos'] if v['path'] == video_path), None)
 
-                # Get metadata for the video
-                metadata = self.get_video_metadata(video_path)
-
                 if existing:
-                    # Create a new dict with default values for missing fields
+                    # Create a new dict, using fresh metadata but preserving runtime settings
                     video_entry = {
                         'path': video_path,
                         'name': file,
                         'enabled': existing.get('enabled', True),
                         'order': existing.get('order', len(available_videos)),
-                        'title': existing.get('title', metadata['title']),
-                        'description': existing.get('description', metadata['description']),
-                        'duration': existing.get('duration', metadata['duration'])
+                        # Always use fresh metadata
+                        'title': metadata['title'],
+                        'description': metadata['description'],
+                        'duration': metadata['duration']
                     }
-                    available_videos.append(video_entry)
                 else:
-                    # Create new entry with metadata
+                    # Create new entry with fresh metadata
                     video_entry = {
                         'path': video_path,
                         'name': file,
@@ -193,7 +194,7 @@ class VideoPlayer:
                         'order': len(available_videos),
                         **metadata
                     }
-                    available_videos.append(video_entry)
+                available_videos.append(video_entry)
 
         self.config['videos'] = available_videos
         self.save_config()

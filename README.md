@@ -83,6 +83,8 @@ Description=PHS Video Player
 After=network.target
 
 [Service]
+User=phs
+Group=phs
 Type=simple
 Environment=PYTHONUNBUFFERED=1
 SupplementaryGroups=input
@@ -98,6 +100,8 @@ WantedBy=multi-user.target
 EOF
 
 # Enable and start the service
+sudo usermod -a -G video phs
+
 sudo systemctl daemon-reload
 sudo systemctl enable phs-video-player
 sudo systemctl start phs-video-player
