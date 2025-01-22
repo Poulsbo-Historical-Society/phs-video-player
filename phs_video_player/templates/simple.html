@@ -4,6 +4,8 @@
 <head>
     <title>PHS / {{ config.display_name }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='js/video-player-client.js') }}"></script>
     <style>
         /* Reset and base styles */
         * {
@@ -179,6 +181,10 @@
 
     <h2>{{ config.display_name }}</h2>
 
+    <div id="connection-status" style="display: none; text-align: center; color: #ff4444; margin: 10px 0;">
+        Disconnected
+    </div>
+
     <div class="instructions">
         <p>Touch a video title to begin playing</p>
     </div>
@@ -187,7 +193,7 @@
         <div id="video-items">
             {% for video in config.videos %}
             <div class="video-item {% if video.enabled and config.videos|selectattr('enabled')|list|length == 1 %}active{% endif %}"
-                data-path="{{ video.path }}" data-name="{{ video.name }}" onclick="selectVideo(this)">
+                data-path="{{ video.path }}" data-name="{{ video.name }}" onclick="handleVideoSelect(this)">
                 <div class="video-title">{{ video.title }}</div>
                 {% if video.description %}
                 <div class="video-description">{{ video.description }}</div>
@@ -201,44 +207,49 @@
     </div>
 
     <script>
-        function selectVideo(element) {
-            // Remove active class from all videos
-            document.querySelectorAll('.video-item').forEach(item => {
-                item.classList.remove('active');
-            });
+        // Initialize the video player client
+        const client = new VideoPlayerClient({
+            onConnectionChange: (connected) => {
+                document.getElementById('connection-status').style.display =
+                    connected ? 'none' : 'block';
+            },
 
-            // Add active class to selected video
-            element.classList.add('active');
+            onMetadataUpdate: (data) => {
+                document.querySelector('h2').textContent = data.display_name;
+                // Could update video metadata here if needed
+            },
 
-            // Prepare the configuration update
-            const videos = [];
-            document.querySelectorAll('.video-item').forEach((item, index) => {
-                videos.push({
-                    path: item.dataset.path,
-                    name: item.dataset.name,
-                    enabled: item === element,
-                    order: index
+            onPlaylistUpdate: (data) => {
+                const videoItems = document.querySelectorAll('.video-item');
+                videoItems.forEach(item => item.classList.remove('active'));
+
+                data.playlist.forEach(video => {
+                    const element = document.querySelector(`[data-path="${video.path}"]`);
+                    if (element) {
+                        element.classList.add('active');
+                    }
                 });
-            });
+            },
 
-            const config = {
-                display_name: "{{ config.display_name }}",
-                videos: videos
-            };
+            onStatusUpdate: (data) => {
+                console.log("status update", data)
+            }
+        });
 
-            // Send the update
-            fetch('/update_config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(config)
-            })
-                .then(response => response.json())
-                .catch(error => {
-                    console.error('Error updating video selection');
-                });
+        // Video selection handler
+        async function handleVideoSelect(element) {
+            try {
+                await client.selectVideo({ element });
+            } catch (error) {
+                console.error('Error selecting video:', error);
+                // Could show an error message to the user here
+            }
         }
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            client.disconnect();
+        });
     </script>
 </body>
 

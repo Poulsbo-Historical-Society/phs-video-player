@@ -165,6 +165,8 @@
         }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='js/video-player-client.js') }}"></script>
 </head>
 
 <body>
@@ -172,6 +174,12 @@
         <img src="{{ url_for('static', filename='images/phs-color-logo.png') }}" alt="Museum Logo" class="logo">
     </div>
     <h2>{{ config.display_name }}</h2>
+
+    <div id="connection-status"
+        style="display: none; text-align: center; background: #ff4444; color: white; padding: 10px; border-radius: 4px; margin: 10px 0;">
+        Disconnected from server - Changes will not update automatically
+    </div>
+
 
     <div
         style="background: white; border-radius: 8px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
@@ -202,7 +210,7 @@
     <div class="preview-container" id="preview-container">
         <div class="preview-title">
             Currently Playing:
-            <!-- <button onclick="togglePreview()" class="preview-toggle" id="preview-toggle">
+            <!-- <button onclick="client.togglePreview()" class="preview-toggle" id="preview-toggle">
                 Disable Preview
             </button> -->
         </div>
@@ -211,7 +219,7 @@
     {% else %}
     <!-- <div class="preview-container">
         <div class="preview-title">
-            <button onclick="togglePreview()" class="preview-toggle disabled" id="preview-toggle">
+            <button onclick="client.togglePreview()" class="preview-toggle disabled" id="preview-toggle">
                 Show Preview
             </button>
         </div>
@@ -249,35 +257,78 @@
         </div>
 
         <button onclick="saveChanges()">Save Changes</button>
-        <button onclick="restartDaemon()" class="restart">Restart Video Player</button>
-        <button onclick="restartSystem()" class="restart">Restart Display System</button>
+        <button onclick="handleRestartDaemon()" class="restart">Restart Video Player</button>
+        <button onclick="handleRestartSystem()" class="restart">Restart Display System</button>
     </div>
 
     <script>
-        {% if config.preview_enabled %}
-        // Only start the refresh interval if preview is enabled
-        const previewInterval = setInterval(() => {
-            const preview = document.getElementById('preview');
-            if (preview) {
-                preview.src = '/preview.png?t=' + Date.now();
-            } else {
-                clearInterval(previewInterval);
+
+        // Helper function to compare arrays
+        function arraysEqual(a, b) {
+            if (a.length !== b.length) return false;
+            return a.every((val, index) => val === b[index]);
+        }
+
+        // Initialize the video player client
+        const client = new VideoPlayerClient({
+            onConnectionChange: (connected) => {
+                document.getElementById('connection-status').style.display =
+                    connected ? 'none' : 'block';
+            },
+
+            onMetadataUpdate: (data) => {
+                document.querySelector('h2').textContent = data.display_name;
+                document.getElementById('display-name').value = data.display_name;
+            },
+
+            onPlaylistUpdate: (data) => {
+                const videoItems = document.getElementById('video-items');
+                const itemsMap = new Map(
+                    Array.from(videoItems.children).map(item => [item.dataset.path, item])
+                );
+
+                // Create a set of paths in the playlist for quick lookup
+                const playlistPaths = new Set(data.playlist.map(video => video.path));
+
+                // First, update all checkboxes based on playlist membership
+                itemsMap.forEach((item, path) => {
+                    const checkbox = item.querySelector('input[type="checkbox"]');
+                    checkbox.checked = playlistPaths.has(path);
+                });
+
+                // Then, reorder elements if needed
+                const currentOrder = Array.from(videoItems.children).map(item => item.dataset.path);
+                const newOrder = data.playlist.map(video => video.path);
+
+                if (!arraysEqual(currentOrder, newOrder)) {
+                    // Only reorder if the order has actually changed
+                    data.playlist.forEach(video => {
+                        const item = itemsMap.get(video.path);
+                        if (item) {
+                            videoItems.appendChild(item); // Move to end in correct order
+                        }
+                    });
+                }
+            },
+
+            onStatusUpdate: (data) => {
+                console.log("status update", data)
             }
-        }, 2000);
-        {% endif %}
+        });
 
-
+        // Initialize Sortable
         new Sortable(document.getElementById('video-items'), {
             animation: 150,
             ghostClass: 'sortable-ghost'
         });
 
-        function saveChanges() {
+        // Save changes handler
+        async function saveChanges() {
             const videos = [];
             document.querySelectorAll('.video-item').forEach((item, index) => {
                 videos.push({
                     path: item.dataset.path,
-                    name: item.dataset.path,
+                    name: item.dataset.name,
                     enabled: item.querySelector('input[type="checkbox"]').checked,
                     order: index
                 });
@@ -288,58 +339,56 @@
                 videos: videos
             };
 
-            fetch('/update_config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(config)
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        alert('Changes saved successfully! Playback will restart with the new configuration.');
-                    }
-                })
-                .catch(error => {
-                    alert('Error saving changes. Please try again.');
-                });
-        }
-
-        function restartDaemon() {
-            if (confirm('Are you sure you want to restart the video player?')) {
-                fetch('/system/restart_daemon', {
-                    method: 'POST'
-                });
-            }
-        }
-
-        function restartSystem() {
-            if (confirm('Are you sure you want to restart the entire system?')) {
-                fetch('/system/restart', {
-                    method: 'POST'
-                });
-            }
-        }
-
-        function togglePreview() {
-            fetch('/toggle_preview', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
+            try {
+                const result = await client.updateConfig(config);
+                if (result.status === 'success') {
+                    alert('Changes saved successfully! Playback will restart with the new configuration.');
                 }
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        // Reload the page to reflect the new state
-                        window.location.reload();
-                    }
-                })
-                .catch(error => {
-                    alert('Error toggling preview. Please try again.');
-                });
+            } catch (error) {
+                console.error('Error saving changes:', error);
+                alert('Error saving changes. Please try again.');
+            }
         }
+
+        // Restart handlers
+        async function handleRestartDaemon() {
+            if (confirm('Are you sure you want to restart the video player?')) {
+                try {
+                    await client.restartDaemon();
+                } catch (error) {
+                    console.error('Error restarting daemon:', error);
+                    alert('Error restarting video player. Please try again.');
+                }
+            }
+        }
+
+        async function handleRestartSystem() {
+            if (confirm('Are you sure you want to restart the entire system?')) {
+                try {
+                    await client.restartSystem();
+                } catch (error) {
+                    console.error('Error restarting system:', error);
+                    alert('Error restarting system. Please try again.');
+                }
+            }
+        }
+
+        // Preview update
+        {% if config.preview_enabled %}
+        // Update preview via status updates instead of interval
+        document.addEventListener('DOMContentLoaded', () => {
+            const preview = document.getElementById('preview');
+            if (preview) {
+                // Set initial preview
+                preview.src = '/preview.png?t=' + Date.now();
+            }
+        });
+        {% endif %}
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            client.disconnect();
+        });
     </script>
 </body>
 
